@@ -1,0 +1,203 @@
+.MODEL small              ; Small memory model (1 data, 1 code segment)
+.STACK 100h               ; Stack size = 256 bytes
+
+.DATA
+
+; MESSAGES FOR USER
+
+msgInput   db 13,10,'Enter HEX bytes (8-16 values): $'
+msgC       db 13,10,'Word C = $'
+msgSorted  db 13,10,'Sorted array: $'
+msgRot     db 13,10,'After rotation: $'
+newLine    db 13,10,'$'
+
+
+; INPUT BUFFER FOR INT 21h / AH=0Ah
+
+inputBuf db 50             ; Maximum input length
+         db ?              ; Actual number of characters read
+         db 50 dup(?)      ; Input characters
+
+
+; DATA STORAGE
+
+byteArray db 16 dup(?)     ; Stores converted bytes (max 16)
+byteCount db 0             ; Number of bytes entered
+wordC     dw 0             ; Word C (STEP 4)
+
+.CODE
+main PROC
+    mov ax, @data          ; Load data segment
+    mov ds, ax
+
+
+; STEP 2: READ INPUT
+
+    mov dx, offset msgInput
+    mov ah, 09h            ; Print string
+    int 21h
+
+    mov dx, offset inputBuf
+    mov ah, 0Ah            ; Buffered keyboard input
+    int 21h
+
+
+; STEP 3: ASCII HEX → BYTES
+
+    mov si, offset inputBuf + 2 ; SI → first character
+    mov di, offset byteArray    ; DI → destination array
+    xor cx, cx                  ; CX counts bytes
+
+convert_loop:
+    mov al, [si]           ; Read character
+    cmp al, 13             ; ENTER?
+    je convert_done
+
+    cmp al, ' '            ; Space?
+    je skip_char
+
+    call hex_to_nibble     ; Convert high nibble
+    shl al, 4
+    mov bl, al
+
+    inc si
+    mov al, [si]
+    call hex_to_nibble     ; Convert low nibble
+    or al, bl              ; Combine nibbles
+
+    mov [di], al           ; Store byte
+    inc di
+    inc cx                 ; Increment byte count
+
+skip_char:
+    inc si
+    jmp convert_loop
+
+convert_done:
+    mov byteCount, cl      ; Save number of bytes
+
+
+; STEP 4: COMPUTE WORD C
+
+
+xor ax, ax           ; AX = Word C (AH:AL)
+
+
+; Bits 0–3: XOR(first low nibble, last high nibble)
+
+mov al, byteArray[0]
+and al, 0Fh
+
+mov al, byteCount
+xor ah, ah
+mov si, ax
+dec si
+
+mov dl, byteArray[si]
+and dl, 0F0h
+shr dl, 4
+xor al, dl            ; AL = bits 0–3
+
+
+; Bits 4–7: OR bits 2–5 of all bytes
+
+xor cl, cl            ; OR accumulator
+
+mov cl, byteCount
+xor ch, ch
+xor si, si
+
+or_loop:
+    mov dl, byteArray[si]
+    shr dl, 2
+    and dl, 0Fh
+    or cl, dl
+    inc si
+    loop or_loop
+
+and cl, 0Fh
+shl cl, 4
+or al, cl             ; AL = full low byte of C
+
+
+; Bits 8–15: Sum of bytes mod 256
+
+xor ah, ah
+
+mov cl, byteCount
+xor ch, ch
+xor si, si
+
+sum_loop:
+    add ah, byteArray[si]
+    inc si
+    loop sum_loop
+
+mov wordC, ax
+
+
+
+
+; STEP 5: SORT DESCENDING
+
+    mov cl, byteCount
+    dec cl
+
+outer:
+    mov si, offset byteArray
+    mov ch, cl
+
+inner:
+    mov al, [si]
+    mov bl, [si+1]
+    cmp al, bl
+    jnc no_swap
+    mov [si], bl
+    mov [si+1], al
+no_swap:
+    inc si
+    dec ch
+    jnz inner
+    dec cl
+    jnz outer
+
+
+; STEP 6: ROTATIONS
+
+    mov si, offset byteArray
+    xor ch, ch
+    mov cl, byteCount      ; CX = loop counter
+
+rot_loop:
+    push cx               ; Save loop counter
+
+    mov al, [si]           ; Load byte
+    mov cl, al
+    and cl, 03h            ; N = sum of first 2 bits
+    rol al, cl            ; Rotate left
+    mov [si], al          ; Store result
+
+    pop cx                 ; Restore CX
+    inc si
+    loop rot_loop
+
+
+; PROGRAM EXIT
+
+    mov ah, 4Ch
+    int 21h
+main ENDP
+
+
+; HEX ASCII → NIBBLE SUBROUTINE
+
+hex_to_nibble PROC
+    cmp al, '9'
+    jle digit
+    sub al, 7              ; Adjust for A–F
+digit:
+    sub al, '0'
+    ret
+hex_to_nibble ENDP
+
+END main
